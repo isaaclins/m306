@@ -1,0 +1,65 @@
+name: Run Tests
+
+on: [push]
+
+jobs:
+  generate-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Generate test matrix
+        id: set-matrix
+        run: |
+          echo "Searching for test files..."
+          # Adjust the path if needed:
+          testFiles=$(find ./frontend/__unit-test__ -maxdepth 1 -name "*.test.js")
+          if [ -z "$testFiles" ]; then
+            echo "No test files found."
+            echo "matrix={}" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          # Convert the newline-separated list into a compact JSON array (single line)
+          json_array=$(echo "$testFiles" | jq -R -s -c 'split("\n")[:-1]')
+          # Build the matrix JSON object in compact form using the -c flag
+          matrix_json=$(jq -c -n --argjson files "$json_array" '{ testFile: $files }')
+          echo "Matrix JSON: $matrix_json"
+          echo "matrix=$matrix_json" >> $GITHUB_OUTPUT
+
+  test:
+    needs: generate-matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+      fail-fast: false
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Install dependencies
+        run: npm install
+        working-directory: ./frontend
+
+      - name: Run test
+        run: |
+          testFile=../${{ matrix.testFile }}
+          fileName=$(basename $testFile)
+          if [[ $fileName == 1_* ]]; then
+            echo "Test file starts with 1_, allowing failures."
+            npm run test:singlefile $testFile || true
+          elif [[ $fileName == 0_* ]]; then
+            echo "Test file starts with 0_, failures will cause the job to fail."
+            npm run test:singlefile $testFile
+          else
+            npm run test:singlefile $testFile
+          fi
+        working-directory: ./frontend
